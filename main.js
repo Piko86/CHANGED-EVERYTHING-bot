@@ -345,11 +345,11 @@ async function handleMessages(sock, messageUpdate, printLog) {
             case userMessage.startsWith('.unban'):
                 await unbanCommand(sock, chatId, message);
                 break;
-            case userMessage === '.help' || userMessage === '.menu' || userMessage === '.bot' || userMessage === '.list':
+            case userMessage === '.fullmenu' || userMessage === '.bot' || userMessage === '.list':
                 await helpCommand(sock, chatId, message, global.channelLink);
                 commandExecuted = true;
                 break;
-            case userMessage === '.imenu':
+            case userMessage === '.menu':
                 // Get user name for personalized greeting
                 const pushname = message.pushName || senderId.split('@')[0];
                 await interactiveMenuCommand(sock, chatId, message, pushname);
