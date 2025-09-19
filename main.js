@@ -33,6 +33,7 @@ const deleteCommand = require('./commands/delete');
 const { handleAntilinkCommand, handleLinkDetection } = require('./commands/antilink');
 const { handleAntitagCommand, handleTagDetection } = require('./commands/antitag');
 const { Antilink } = require('./lib/antilink');
+const hideTagCommand = require('./commands/hidetag');
 const memeCommand = require('./commands/meme');
 const tagCommand = require('./commands/tag');
 const jokeCommand = require('./commands/joke');
@@ -469,6 +470,13 @@ async function handleMessages(sock, messageUpdate, printLog) {
                 const messageText = rawText.slice(4).trim();  // use rawText here, not userMessage
                 const replyMessage = message.message?.extendedTextMessage?.contextInfo?.quotedMessage || null;
                 await tagCommand(sock, chatId, senderId, messageText, replyMessage);
+                break;
+            case userMessage.startsWith('.hidetag'):
+                {
+                    const messageText = rawText.slice(8).trim();
+                    const replyMessage = message.message?.extendedTextMessage?.contextInfo?.quotedMessage || null;
+                    await hideTagCommand(sock, chatId, senderId, messageText, replyMessage, message);
+                }
                 break;
             case userMessage.startsWith('.antilink'):
                 if (!isGroup) {
