@@ -91,7 +91,7 @@ const facebookCommand = require('./commands/facebook');
 const spotifyCommand = require('./commands/spotify');
 const playCommand = require('./commands/play');
 const tiktokCommand = require('./commands/tiktok');
-const songCommand = require('./commands/song');
+const { songCommand, handleSongReply } = require('./commands/song');
 const aiCommand = require('./commands/ai');
 const urlCommand = require('./commands/url');
 const { handleTranslateCommand } = require('./commands/translate');
@@ -242,6 +242,10 @@ async function handleMessages(sock, messageUpdate, printLog) {
             if (menuHandled) {
                 return; // Menu navigation was handled, don't process further
             }
+
+            // ✅ NEW: Check if reply belongs to song command
+            const songHandled = await handleSongReply(sock, chatId, message, userMessage);
+            if (songHandled) return;
 
             // Then check if it's a game move (only after menu navigation check)
             if (/^[1-9]$/.test(userMessage) || userMessage.toLowerCase() === 'surrender') {
