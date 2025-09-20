@@ -4,6 +4,7 @@ const yts = require('yt-search');
 
 let songReplyState = {}; // store state for reply handling
 
+// 🔹 Stage 1: User runs `.song <name or link>`
 async function songCommand(sock, chatId, message) {
     try {
         const text = message.message?.conversation || message.message?.extendedTextMessage?.text || '';
@@ -24,13 +25,16 @@ async function songCommand(sock, chatId, message) {
             video = search.videos[0];
         }
 
-        // Save state for reply
         const senderId = message.key.participant || message.key.remoteJid;
+
+        // Save state for reply
         songReplyState[senderId] = {
             url: video.url,
             title: video.title,
             thumbnail: video.thumbnail
         };
+
+        console.log("✅ Saved song state for:", senderId, songReplyState[senderId]);
 
         // Send info card with options
         await sock.sendMessage(chatId, {
@@ -49,22 +53,36 @@ async function songCommand(sock, chatId, message) {
         }, { quoted: message });
 
     } catch (err) {
-        console.error('Song command error:', err);
+        console.error('❌ Song command error:', err);
         await sock.sendMessage(chatId, { text: '❌ Failed to fetch song.' }, { quoted: message });
     }
 }
 
-// Reply handler
+// 🔹 Stage 2: User replies (1.1 or 1.2)
 async function handleSongReply(sock, chatId, message, userMessage, senderId) {
     try {
-        const state = songReplyState[senderId];
-        if (!state) return false; // no active song state
+        console.log("👉 Song reply handler triggered:", { senderId, userMessage });
 
+        const state = songReplyState[senderId];
+        if (!state) {
+            console.log("⚠️ No state found for sender:", senderId);
+            return false; // not a song reply
+        }
+
+        // User selected AUDIO
         if (userMessage === '1.1') {
-            // Send as Audio
+            console.log("🎵 User chose AUDIO for:", state.url);
             const apiUrl = `https://izumiiiiiiii.dpdns.org/downloader/youtube?url=${encodeURIComponent(state.url)}&format=mp3`;
+
+            console.log("📡 Fetching from API:", apiUrl);
             const res = await axios.get(apiUrl, { timeout: 30000 });
-            if (!res.data?.result?.download) throw new Error('API failed');
+
+            if (!res.data?.result?.download) {
+                console.log("⚠️ API response invalid:", res.data);
+                throw new Error('API failed (no download link)');
+            }
+
+            console.log("✅ API returned download link:", res.data.result.download);
 
             await sock.sendMessage(chatId, {
                 audio: { url: res.data.result.download },
@@ -72,15 +90,24 @@ async function handleSongReply(sock, chatId, message, userMessage, senderId) {
                 fileName: `${state.title}.mp3`
             }, { quoted: message });
 
-            delete songReplyState[senderId]; // clear state
+            delete songReplyState[senderId];
             return true;
         }
 
+        // User selected DOCUMENT
         if (userMessage === '1.2') {
-            // Send as Document
+            console.log("📂 User chose DOCUMENT for:", state.url);
             const apiUrl = `https://izumiiiiiiii.dpdns.org/downloader/youtube?url=${encodeURIComponent(state.url)}&format=mp3`;
+
+            console.log("📡 Fetching from API:", apiUrl);
             const res = await axios.get(apiUrl, { timeout: 30000 });
-            if (!res.data?.result?.download) throw new Error('API failed');
+
+            if (!res.data?.result?.download) {
+                console.log("⚠️ API response invalid:", res.data);
+                throw new Error('API failed (no download link)');
+            }
+
+            console.log("✅ API returned download link:", res.data.result.download);
 
             await sock.sendMessage(chatId, {
                 document: { url: res.data.result.download },
@@ -88,13 +115,15 @@ async function handleSongReply(sock, chatId, message, userMessage, senderId) {
                 fileName: `${state.title}.mp3`
             }, { quoted: message });
 
-            delete songReplyState[senderId]; // clear state
+            delete songReplyState[senderId];
             return true;
         }
 
+        console.log("⚠️ Invalid reply received:", userMessage);
         return false;
+
     } catch (e) {
-        console.error("Song reply error:", e);
+        console.error("❌ Song reply error:", e);
         await sock.sendMessage(chatId, { text: '❌ Error processing your choice.' }, { quoted: message });
         return true;
     }
