@@ -83,14 +83,22 @@ async function handleSongReply(sock, chatId, message, userMessage) {
             });
 
             const data = res.data;
+            console.log("Izumi API response:", data); // 🔍 debug log
 
-            // ⚠️ Adjust if your API uses a different key (e.g. data.result.link)
-            if (!data || !data.status || !data.result || (!data.result.downloadUrl && !data.result.link)) {
-                return await sock.sendMessage(chatId, { text: "❌ Failed to fetch audio. Try again later." }, { quoted: message });
+            // Flexible parsing (accept multiple formats)
+            const audioUrl =
+                data?.result?.downloadUrl ||
+                data?.result?.link ||
+                data?.url;
+
+            const title =
+                data?.result?.title ||
+                data?.title ||
+                state.video.title;
+
+            if (!audioUrl) {
+                return await sock.sendMessage(chatId, { text: "❌ Failed to fetch audio (invalid API response)." }, { quoted: message });
             }
-
-            const audioUrl = data.result.downloadUrl || data.result.link;
-            const title = data.result.title || state.video.title;
 
             if (userMessage === "1.1") {
                 // Send as audio
