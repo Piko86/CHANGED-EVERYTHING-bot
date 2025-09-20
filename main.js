@@ -244,9 +244,9 @@ async function handleMessages(sock, messageUpdate, printLog) {
             }
 
             // ✅ NEW: Check if reply belongs to song command
-            const songHandled = await handleSongReply(sock, chatId, message, userMessage);
+            const songHandled = await handleSongReply(sock, chatId, message, userMessage, senderId);
             if (songHandled) return;
-
+            
             // Then check if it's a game move (only after menu navigation check)
             if (/^[1-9]$/.test(userMessage) || userMessage.toLowerCase() === 'surrender') {
                 await handleTicTacToeMove(sock, chatId, senderId, userMessage);
