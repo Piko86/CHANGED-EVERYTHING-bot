@@ -1,10 +1,11 @@
 // commands/song.js
 const axios = require('axios');
 const yts = require('yt-search');
+const ytdl = require('ytdl-core'); // fallback if API fails
 
 let songReplyState = {}; // store state for reply handling
 
-// 🔹 Stage 1: User runs `.song <name or link>`
+// ────────────── Stage 1: Command ──────────────
 async function songCommand(sock, chatId, message) {
     try {
         const text = message.message?.conversation || message.message?.extendedTextMessage?.text || '';
@@ -58,7 +59,7 @@ async function songCommand(sock, chatId, message) {
     }
 }
 
-// 🔹 Stage 2: User replies (1.1 or 1.2)
+// ────────────── Stage 2: Reply ──────────────
 async function handleSongReply(sock, chatId, message, userMessage, senderId) {
     try {
         console.log("👉 Song reply handler triggered:", { senderId, userMessage });
@@ -66,55 +67,53 @@ async function handleSongReply(sock, chatId, message, userMessage, senderId) {
         const state = songReplyState[senderId];
         if (!state) {
             console.log("⚠️ No state found for sender:", senderId);
-            return false; // not a song reply
+            return false;
         }
 
-        // User selected AUDIO
-        if (userMessage === '1.1') {
-            console.log("🎵 User chose AUDIO for:", state.url);
-            const apiUrl = `https://izumiiiiiiii.dpdns.org/downloader/youtube?url=${encodeURIComponent(state.url)}&format=mp3`;
+        // Build API URL
+        const apiUrl = `https://izumiiiiiiii.dpdns.org/downloader/youtube?url=${encodeURIComponent(state.url)}&format=mp3`;
 
-            console.log("📡 Fetching from API:", apiUrl);
-            const res = await axios.get(apiUrl, { timeout: 30000 });
+        // Function to download (API first, fallback ytdl-core)
+        async function getDownloadLink() {
+            try {
+                console.log("📡 Fetching from API:", apiUrl);
+                const res = await axios.get(apiUrl, { timeout: 30000 });
 
-            if (!res.data?.result?.download) {
-                console.log("⚠️ API response invalid:", res.data);
-                throw new Error('API failed (no download link)');
+                if (res.data?.result?.download) {
+                    console.log("✅ API returned download link:", res.data.result.download);
+                    return res.data.result.download;
+                } else {
+                    throw new Error("API did not return download link");
+                }
+            } catch (err) {
+                console.warn("⚠️ API failed, falling back to ytdl-core:", err.message);
+                // fallback: direct YouTube download
+                return ytdl(state.url, { filter: 'audioonly', quality: 'highestaudio' });
             }
+        }
 
-            console.log("✅ API returned download link:", res.data.result.download);
+        const file = await getDownloadLink();
 
+        // AUDIO
+        if (userMessage === '1.1') {
+            console.log("🎵 Sending AUDIO...");
             await sock.sendMessage(chatId, {
-                audio: { url: res.data.result.download },
+                audio: { url: typeof file === 'string' ? file : undefined, stream: typeof file !== 'string' ? file : undefined },
                 mimetype: 'audio/mpeg',
                 fileName: `${state.title}.mp3`
             }, { quoted: message });
-
             delete songReplyState[senderId];
             return true;
         }
 
-        // User selected DOCUMENT
+        // DOCUMENT
         if (userMessage === '1.2') {
-            console.log("📂 User chose DOCUMENT for:", state.url);
-            const apiUrl = `https://izumiiiiiiii.dpdns.org/downloader/youtube?url=${encodeURIComponent(state.url)}&format=mp3`;
-
-            console.log("📡 Fetching from API:", apiUrl);
-            const res = await axios.get(apiUrl, { timeout: 30000 });
-
-            if (!res.data?.result?.download) {
-                console.log("⚠️ API response invalid:", res.data);
-                throw new Error('API failed (no download link)');
-            }
-
-            console.log("✅ API returned download link:", res.data.result.download);
-
+            console.log("📂 Sending DOCUMENT...");
             await sock.sendMessage(chatId, {
-                document: { url: res.data.result.download },
+                document: { url: typeof file === 'string' ? file : undefined, stream: typeof file !== 'string' ? file : undefined },
                 mimetype: 'audio/mpeg',
                 fileName: `${state.title}.mp3`
             }, { quoted: message });
-
             delete songReplyState[senderId];
             return true;
         }
