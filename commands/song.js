@@ -103,33 +103,51 @@ async function handleSongReply(sock, chatId, message, userMessage) {
                 }
             } else {
                 // Fallback: use ytdl-core
-                const tempPath = path.join(__dirname, "../temp", `${Date.now()}-${title}.mp3`);
-                await new Promise((resolve, reject) => {
-                    const stream = ytdl(urlYt, { filter: 'audioonly', quality: 'highestaudio' });
-                    const writer = fs.createWriteStream(tempPath);
-                    stream.pipe(writer);
-                    writer.on('finish', resolve);
-                    writer.on('error', reject);
-                });
+                try {
+                    const tempDir = path.join(__dirname, "../temp");
+                    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+                    const tempPath = path.join(tempDir, `${Date.now()}-${title}.mp3`);
 
-                if (userMessage === "1.1") {
-                    await sock.sendMessage(chatId, {
-                        audio: { url: tempPath },
-                        mimetype: "audio/mpeg",
-                        fileName: `${title}.mp3`
-                    }, { quoted: message });
-                } else {
-                    await sock.sendMessage(chatId, {
-                        document: { url: tempPath },
-                        mimetype: "audio/mpeg",
-                        fileName: `${title}.mp3`
+                    await new Promise((resolve, reject) => {
+                        const stream = ytdl(urlYt, { 
+                            filter: 'audioonly',
+                            quality: 'highestaudio',
+                            highWaterMark: 1 << 25  // prevent buffering crash
+                        });
+
+                        const writer = fs.createWriteStream(tempPath);
+                        stream.pipe(writer);
+
+                        stream.on('error', reject);
+                        writer.on('finish', resolve);
+                        writer.on('error', reject);
+                    });
+
+                    if (userMessage === "1.1") {
+                        await sock.sendMessage(chatId, {
+                            audio: { url: tempPath },
+                            mimetype: "audio/mpeg",
+                            fileName: `${title}.mp3`
+                        }, { quoted: message });
+                    } else {
+                        await sock.sendMessage(chatId, {
+                            document: { url: tempPath },
+                            mimetype: "audio/mpeg",
+                            fileName: `${title}.mp3`
+                        }, { quoted: message });
+                    }
+
+                    // Cleanup temp file after 30s
+                    setTimeout(() => {
+                        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+                    }, 30000);
+
+                } catch (err) {
+                    console.error("ytdl fallback failed:", err.message);
+                    await sock.sendMessage(chatId, { 
+                        text: "❌ YouTube download failed. Try another song." 
                     }, { quoted: message });
                 }
-
-                // Cleanup temp file after a delay
-                setTimeout(() => {
-                    if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
-                }, 30000);
             }
 
             delete songReplyState[chatId]; // clear state after use
