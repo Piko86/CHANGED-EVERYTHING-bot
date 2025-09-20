@@ -1,63 +1,45 @@
 const yts = require('yt-search');
-const axios = 'axios';
+const axios = require('axios');
 
-// Store pending song requests with a timeout
-let songReplyState = {};
-
-// Clean up old requests every 5 minutes to prevent memory leaks
-setInterval(() => {
-    const now = Date.now();
-    for (const chatId in songReplyState) {
-        // Remove requests older than 5 minutes
-        if (now - songReplyState[chatId].timestamp > 300000) {
-            delete songReplyState[chatId];
-        }
-    }
-}, 300000);
-
+let songReplyState = {}; // store pending song requests
 
 async function songCommand(sock, chatId, message) {
     try {
         const text = message.message?.conversation || message.message?.extendedTextMessage?.text;
-        if (!text) return; // Ignore empty messages
-        
         const searchQuery = text.split(' ').slice(1).join(' ').trim();
 
         if (!searchQuery) {
             return await sock.sendMessage(chatId, { text: "❌ What song do you want to download?\n👉 Example: .song despacito" });
         }
 
-        // 1. SEARCH FOR THE SONG
-        // This is a common point of failure.
+        console.log(`🔍 Searching for: ${searchQuery}`);
+
+        // Search for the song
         const { videos } = await yts(searchQuery);
         if (!videos || videos.length === 0) {
-            return await sock.sendMessage(chatId, { text: `❌ No songs found for "${searchQuery}"!` });
+            return await sock.sendMessage(chatId, { text: "❌ No songs found!" });
         }
 
-        const video = videos[0]; // Get the first result
+        const video = videos[0]; // first result
         const urlYt = video.url;
 
-        // Ensure thumbnail exists before trying to send it
-        if (!video.thumbnail) {
-            console.error("Video found, but thumbnail is missing:", video);
-            return await sock.sendMessage(chatId, { text: "❌ Found the song, but couldn't get its preview image. Please try another song." });
-        }
+        console.log(`✅ Found: ${video.title} by ${video.author.name}`);
 
-        // 2. SEND PREVIEW MESSAGE
+        // Send preview with choices
         const previewMsg = await sock.sendMessage(chatId, {
             image: { url: video.thumbnail },
             caption: `🍄 *KsmD SonG DownloadeR* 🍄
 
 🎵 *TITLE:* ${video.title}
 ⏱ *DURATION:* ${video.timestamp}
-👀 *VIEWS:* ${video.views.toLocaleString()}
+👀 *VIEWS:* ${video.views}
 📅 *RELEASED:* ${video.ago}
 👤 *AUTHOR:* ${video.author.name}
 🔗 *URL:* ${urlYt}
 
 🛑 *Reply With Your Choice:*
-*1.1* 🎵 AUDIO (sends as a voice note)
-*1.2* 📂 DOCUMENT (sends as a file)
+*1.1* 🎵 AUDIO TYPE
+*1.2* 📂 DOCUMENT TYPE
 
 ⚡ Powered by KnightBot`
         }, { quoted: message });
@@ -66,82 +48,108 @@ async function songCommand(sock, chatId, message) {
         songReplyState[chatId] = {
             video,
             messageId: previewMsg.key.id,
-            timestamp: Date.now() // For cleanup
+            timestamp: Date.now()
         };
 
+        console.log(`💾 Saved state for chat: ${chatId}`);
+
     } catch (error) {
-        // **IMPROVED ERROR LOGGING**
-        // This will now tell you exactly what failed.
-        console.error("❌ Song Command Error:", error.message || error);
-        await sock.sendMessage(chatId, { text: "❌ An unexpected error occurred while searching for the song. The service might be down." });
+        console.error("Song command error:", error);
+        console.error("Error details:", error.message);
+        await sock.sendMessage(chatId, { text: "❌ Error fetching song. Please try again later." });
     }
 }
-
 
 // Reply handler
 async function handleSongReply(sock, chatId, message, userMessage) {
-    const state = songReplyState[chatId];
-    // Check if there is a pending request and if the new message is a reply to our preview
-    if (!state || message.message?.extendedTextMessage?.contextInfo?.stanzaId !== state.messageId) {
-        return false;
-    }
-
     try {
+        const state = songReplyState[chatId];
+        if (!state) {
+            console.log(`❌ No state found for chat: ${chatId}`);
+            return false;
+        }
+
+        const quoted = message.message?.extendedTextMessage?.contextInfo?.stanzaId;
+        if (quoted !== state.messageId) {
+            console.log(`❌ Message ID mismatch. Expected: ${state.messageId}, Got: ${quoted}`);
+            return false; // not replying to song preview
+        }
+
         if (userMessage === "1.1" || userMessage === "1.2") {
-            await sock.sendMessage(chatId, { text: "⏳ Processing your request... Please wait." }, { quoted: message });
+            console.log(`🎵 Processing ${userMessage === "1.1" ? "audio" : "document"} request for: ${state.video.title}`);
+            
+            await sock.sendMessage(chatId, { text: "⏳ Processing your request..." }, { quoted: message });
 
             const urlYt = state.video.url;
             
-            // **API CALL WITH ERROR HANDLING**
-            // This is another common point of failure.
-            let data;
             try {
-                const res = await axios.get(`https://apis-keith.vercel.app/download/dlmp3?url=${urlYt}`);
-                data = res.data;
-            } catch (apiError) {
-                console.error("API download error:", apiError.message);
-                await sock.sendMessage(chatId, { text: "❌ The download service failed. It might be temporarily offline. Please try again later." });
-                delete songReplyState[chatId]; // Clean up state
-                return true; // Handled the reply
+                console.log(`🌐 Fetching download URL for: ${urlYt}`);
+                const res = await axios.get(`https://apis-keith.vercel.app/download/dlmp3?url=${urlYt}`, {
+                    timeout: 30000 // 30 second timeout
+                });
+                
+                const data = res.data;
+                console.log("API Response:", data);
+
+                if (!data?.status || !data?.result?.downloadUrl) {
+                    console.error("Invalid API response:", data);
+                    return await sock.sendMessage(chatId, { text: "❌ Failed to fetch audio. The download service might be temporarily unavailable." });
+                }
+
+                const audioUrl = data.result.downloadUrl;
+                const title = data.result.title || state.video.title;
+
+                console.log(`📥 Downloading: ${title}`);
+
+                if (userMessage === "1.1") {
+                    // Send as audio
+                    await sock.sendMessage(chatId, {
+                        audio: { url: audioUrl },
+                        mimetype: "audio/mpeg",
+                        fileName: `${title}.mp3`
+                    }, { quoted: message });
+                } else {
+                    // Send as document
+                    await sock.sendMessage(chatId, {
+                        document: { url: audioUrl },
+                        mimetype: "audio/mpeg",
+                        fileName: `${title}.mp3`
+                    }, { quoted: message });
+                }
+
+                console.log(`✅ Successfully sent ${userMessage === "1.1" ? "audio" : "document"}: ${title}`);
+                delete songReplyState[chatId]; // clear state after use
+                return true;
+
+            } catch (downloadError) {
+                console.error("Download API error:", downloadError);
+                await sock.sendMessage(chatId, { text: "❌ Failed to download audio. The service might be down or the video might be unavailable for download." });
+                delete songReplyState[chatId]; // clear state even on error
+                return true;
             }
-
-
-            if (!data?.status || !data?.result?.downloadUrl) {
-                return await sock.sendMessage(chatId, { text: "❌ Failed to get a download link from the service. Try again later." });
-            }
-
-            const audioUrl = data.result.downloadUrl;
-            const title = state.video.title.replace(/[<>:"/\\|?*]+/g, ''); // Sanitize filename
-
-
-            if (userMessage === "1.1") {
-                // Send as playable audio
-                await sock.sendMessage(chatId, {
-                    audio: { url: audioUrl },
-                    mimetype: "audio/mpeg",
-                }, { quoted: message });
-            } else {
-                // Send as a document/file
-                await sock.sendMessage(chatId, {
-                    document: { url: audioUrl },
-                    mimetype: "audio/mpeg",
-                    fileName: `${title}.mp3`
-                }, { quoted: message });
-            }
-
-            delete songReplyState[chatId]; // Clear state after successful download
-            return true; // Indicate that the reply was handled
         }
-        return false; // Not the reply we were looking for
+        return false;
     } catch (err) {
         console.error("handleSongReply error:", err);
-        // Clean up the state on error
-        if (songReplyState[chatId]) {
-            delete songReplyState[chatId];
-        }
-        await sock.sendMessage(chatId, { text: "❌ Something went wrong while sending the file." });
-        return true; // We tried to handle it
+        console.error("Error details:", err.message);
+        return false;
     }
 }
 
-module.exports = { songCommand, handleSongReply };
+// Clean up old states (call this periodically)
+function cleanupOldStates() {
+    const now = Date.now();
+    const maxAge = 10 * 60 * 1000; // 10 minutes
+
+    Object.keys(songReplyState).forEach(chatId => {
+        if (now - songReplyState[chatId].timestamp > maxAge) {
+            delete songReplyState[chatId];
+            console.log(`🧹 Cleaned up old state for chat: ${chatId}`);
+        }
+    });
+}
+
+// Run cleanup every 5 minutes
+setInterval(cleanupOldStates, 5 * 60 * 1000);
+
+module.exports = { songCommand, handleSongReply, cleanupOldStates };
