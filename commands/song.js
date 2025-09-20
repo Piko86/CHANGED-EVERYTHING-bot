@@ -1,34 +1,36 @@
 const yts = require('yt-search');
 const axios = require('axios');
+const ytdl = require('ytdl-core');
+const fs = require('fs');
+const path = require('path');
 
-// Store pending song requests per chat
-let songReplyState = {};
+let songReplyState = {}; // store pending song requests
 
-// Main command: .song <query>
+// Main command
 async function songCommand(sock, chatId, message) {
     try {
         const text = message.message?.conversation || message.message?.extendedTextMessage?.text;
         const searchQuery = text.split(' ').slice(1).join(' ').trim();
 
         if (!searchQuery) {
-            return await sock.sendMessage(chatId, {
+            return await sock.sendMessage(chatId, { 
                 text: "❌ What song do you want to download?\n👉 Example: .song despacito"
-            }, { quoted: message });
+            });
         }
 
-        // Search YouTube
+        // Search for the song
         const { videos } = await yts(searchQuery);
         if (!videos || videos.length === 0) {
-            return await sock.sendMessage(chatId, { text: "❌ No songs found!" }, { quoted: message });
+            return await sock.sendMessage(chatId, { text: "❌ No songs found!" });
         }
 
-        const video = videos[0];
+        const video = videos[0]; // first result
         const urlYt = video.url;
 
-        // Send preview with options
+        // Send preview with choices
         const previewMsg = await sock.sendMessage(chatId, {
             image: { url: video.thumbnail },
-            caption: `🍄 *KsmD SonG DownloadeR* 🍄
+            caption: `🍄 *KnightBot Song Downloader* 🍄
 
 🎵 *TITLE:* ${video.title}
 ⏱ *DURATION:* ${video.timestamp}
@@ -44,7 +46,7 @@ async function songCommand(sock, chatId, message) {
 ⚡ Powered by KnightBot`
         }, { quoted: message });
 
-        // Save state for reply handler
+        // Save state for reply handling
         songReplyState[chatId] = {
             video,
             messageId: previewMsg.key.id,
@@ -53,74 +55,86 @@ async function songCommand(sock, chatId, message) {
 
     } catch (error) {
         console.error("Song command error:", error);
-        await sock.sendMessage(chatId, { text: "❌ Error fetching song. Please try again later." }, { quoted: message });
+        await sock.sendMessage(chatId, { text: "❌ Error fetching song. Please try again later." });
     }
 }
 
-// Reply handler (1.1 = audio, 1.2 = document)
+// Reply handler
 async function handleSongReply(sock, chatId, message, userMessage) {
     try {
         const state = songReplyState[chatId];
         if (!state) return false;
 
-        // Check if reply is to the preview message
         const quoted = message.message?.extendedTextMessage?.contextInfo?.stanzaId;
-        if (quoted !== state.messageId) return false;
+        if (quoted !== state.messageId) return false; // not replying to song preview
 
         if (userMessage === "1.1" || userMessage === "1.2") {
             await sock.sendMessage(chatId, { text: "⏳ Processing your request..." }, { quoted: message });
 
             const urlYt = state.video.url;
+            const title = state.video.title;
+            let audioUrl = null;
 
-            // Izumi API with User-Agent
-            const apiUrl = `https://izumiiiiiiii.dpdns.org/downloader/youtube?url=${encodeURIComponent(urlYt)}&format=mp3`;
-
-            const res = await axios.get(apiUrl, {
-                timeout: 30000,
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            // First try API
+            try {
+                const res = await axios.get(`https://apis-keith.vercel.app/download/dlmp3?url=${urlYt}`, { timeout: 15000 });
+                const data = res.data;
+                if (data?.status && data?.result?.downloadUrl) {
+                    audioUrl = data.result.downloadUrl;
                 }
-            });
-
-            const data = res.data;
-            console.log("Izumi API response:", data); // 🔍 debug log
-
-            // Flexible parsing (accept multiple formats)
-            const audioUrl =
-                data?.result?.downloadUrl ||
-                data?.result?.link ||
-                data?.url;
-
-            const title =
-                data?.result?.title ||
-                data?.title ||
-                state.video.title;
-
-            if (!audioUrl) {
-                return await sock.sendMessage(chatId, { text: "❌ Failed to fetch audio (invalid API response)." }, { quoted: message });
+            } catch (err) {
+                console.error("API failed, falling back to ytdl-core:", err.message);
             }
 
-            if (userMessage === "1.1") {
-                // Send as audio
-                await sock.sendMessage(chatId, {
-                    audio: { url: audioUrl },
-                    mimetype: "audio/mpeg",
-                    fileName: `${title}.mp3`
-                }, { quoted: message });
+            if (audioUrl) {
+                // Send from API
+                if (userMessage === "1.1") {
+                    await sock.sendMessage(chatId, {
+                        audio: { url: audioUrl },
+                        mimetype: "audio/mpeg",
+                        fileName: `${title}.mp3`
+                    }, { quoted: message });
+                } else {
+                    await sock.sendMessage(chatId, {
+                        document: { url: audioUrl },
+                        mimetype: "audio/mpeg",
+                        fileName: `${title}.mp3`
+                    }, { quoted: message });
+                }
             } else {
-                // Send as document
-                await sock.sendMessage(chatId, {
-                    document: { url: audioUrl },
-                    mimetype: "audio/mpeg",
-                    fileName: `${title}.mp3`
-                }, { quoted: message });
+                // Fallback: use ytdl-core
+                const tempPath = path.join(__dirname, "../temp", `${Date.now()}-${title}.mp3`);
+                await new Promise((resolve, reject) => {
+                    const stream = ytdl(urlYt, { filter: 'audioonly', quality: 'highestaudio' });
+                    const writer = fs.createWriteStream(tempPath);
+                    stream.pipe(writer);
+                    writer.on('finish', resolve);
+                    writer.on('error', reject);
+                });
+
+                if (userMessage === "1.1") {
+                    await sock.sendMessage(chatId, {
+                        audio: { url: tempPath },
+                        mimetype: "audio/mpeg",
+                        fileName: `${title}.mp3`
+                    }, { quoted: message });
+                } else {
+                    await sock.sendMessage(chatId, {
+                        document: { url: tempPath },
+                        mimetype: "audio/mpeg",
+                        fileName: `${title}.mp3`
+                    }, { quoted: message });
+                }
+
+                // Cleanup temp file after a delay
+                setTimeout(() => {
+                    if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+                }, 30000);
             }
 
-            // Clear state
-            delete songReplyState[chatId];
+            delete songReplyState[chatId]; // clear state after use
             return true;
         }
-
         return false;
     } catch (err) {
         console.error("handleSongReply error:", err);
