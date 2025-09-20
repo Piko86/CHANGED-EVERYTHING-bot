@@ -1,63 +1,105 @@
-const axios = require('axios');
 const yts = require('yt-search');
-const fs = require('fs');
-const path = require('path');
+const axios = require('axios');
+
+let songReplyState = {}; // store pending song requests
 
 async function songCommand(sock, chatId, message) {
     try {
-        const text = message.message?.conversation || message.message?.extendedTextMessage?.text || '';
-        if (!text) {
-            await sock.sendMessage(chatId, { text: 'Usage: .song <song name or YouTube link>' }, { quoted: message });
-            return;
+        const text = message.message?.conversation || message.message?.extendedTextMessage?.text;
+        const searchQuery = text.split(' ').slice(1).join(' ').trim();
+
+        if (!searchQuery) {
+            return await sock.sendMessage(chatId, { text: "❌ What song do you want to download?\n👉 Example: .song despacito" });
         }
 
-        let video;
-        if (text.includes('youtube.com') || text.includes('youtu.be')) {
-            video = { url: text };
-        } else {
-            const search = await yts(text);
-            if (!search || !search.videos.length) {
-                await sock.sendMessage(chatId, { text: 'No results found.' }, { quoted: message });
-                return;
-            }
-            video = search.videos[0];
+        // Search for the song
+        const { videos } = await yts(searchQuery);
+        if (!videos || videos.length === 0) {
+            return await sock.sendMessage(chatId, { text: "❌ No songs found!" });
         }
 
-        // Inform user
-        await sock.sendMessage(chatId, {
+        const video = videos[0]; // first result
+        const urlYt = video.url;
+
+        // Send preview with choices
+        const previewMsg = await sock.sendMessage(chatId, {
             image: { url: video.thumbnail },
-            caption: `🎵 Downloading: *${video.title}*\n⏱ Duration: ${video.timestamp}`
+            caption: `🍄 *KsmD SonG DownloadeR* 🍄
+
+🎵 *TITLE:* ${video.title}
+⏱ *DURATION:* ${video.timestamp}
+👀 *VIEWS:* ${video.views}
+📅 *RELEASED:* ${video.ago}
+👤 *AUTHOR:* ${video.author.name}
+🔗 *URL:* ${urlYt}
+
+🛑 *Reply With Your Choice:*
+*1.1* 🎵 AUDIO TYPE
+*1.2* 📂 DOCUMENT TYPE
+
+⚡ Powered by KnightBot`
         }, { quoted: message });
 
-        // Get Izumi API link
-        const apiUrl = `https://izumiiiiiiii.dpdns.org/downloader/youtube?url=${encodeURIComponent(video.url)}&format=mp3`;
-        
-        
-        const res = await axios.get(apiUrl, {
-            timeout: 30000,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            }
-        });
+        // Save state for reply handling
+        songReplyState[chatId] = {
+            video,
+            messageId: previewMsg.key.id,
+            timestamp: Date.now()
+        };
 
-        if (!res.data || !res.data.result || !res.data.result.download) {
-            throw new Error('Izumi API failed to return a valid link.');
-        }
-
-        const audioData = res.data.result;
-
-        // Send audio directly using the download URL
-        await sock.sendMessage(chatId, {
-            audio: { url: audioData.download },
-            mimetype: 'audio/mpeg',
-            fileName: `${audioData.title || video.title || 'song'}.mp3`,
-            ptt: false
-        }, { quoted: message });
-
-    } catch (err) {
-        console.error('Song command error:', err);
-        await sock.sendMessage(chatId, { text: '❌ Failed to download song.' }, { quoted: message });
+    } catch (error) {
+        console.error("Song command error:", error);
+        await sock.sendMessage(chatId, { text: "❌ Error fetching song. Please try again later." });
     }
 }
 
-module.exports = songCommand;
+// Reply handler
+async function handleSongReply(sock, chatId, message, userMessage) {
+    try {
+        const state = songReplyState[chatId];
+        if (!state) return false;
+
+        const quoted = message.message?.extendedTextMessage?.contextInfo?.stanzaId;
+        if (quoted !== state.messageId) return false; // not replying to song preview
+
+        if (userMessage === "1.1" || userMessage === "1.2") {
+            await sock.sendMessage(chatId, { text: "⏳ Processing your request..." }, { quoted: message });
+
+            const urlYt = state.video.url;
+            const res = await axios.get(`https://apis-keith.vercel.app/download/dlmp3?url=${urlYt}`);
+            const data = res.data;
+
+            if (!data?.status || !data?.result?.downloadUrl) {
+                return await sock.sendMessage(chatId, { text: "❌ Failed to fetch audio. Try again later." });
+            }
+
+            const audioUrl = data.result.downloadUrl;
+            const title = data.result.title;
+
+            if (userMessage === "1.1") {
+                // Send as audio
+                await sock.sendMessage(chatId, {
+                    audio: { url: audioUrl },
+                    mimetype: "audio/mpeg",
+                    fileName: `${title}.mp3`
+                }, { quoted: message });
+            } else {
+                // Send as document
+                await sock.sendMessage(chatId, {
+                    document: { url: audioUrl },
+                    mimetype: "audio/mpeg",
+                    fileName: `${title}.mp3`
+                }, { quoted: message });
+            }
+
+            delete songReplyState[chatId]; // clear state after use
+            return true;
+        }
+        return false;
+    } catch (err) {
+        console.error("handleSongReply error:", err);
+        return false;
+    }
+}
+
+module.exports = { songCommand, handleSongReply };
